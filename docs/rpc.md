@@ -6,6 +6,29 @@ The thing worth understanding up front is that **the bus is in-process.** Every 
 
 For the channel list, the reply envelope, the per-channel snippets and the event table, see [`README.md`](../README.md#cross-extension-rpc). This document is the reference README does not have room for: the complete spawn-option surface, every error string, the notification race, the registry, and what protocol version `2` does and does not promise.
 
+## Managed workers v1
+
+`ping.data.capabilities` includes `managed-workers-v1`. Protocol version remains 2; older runners without the capability must not be used as a fallback.
+
+| Channel | Payload beyond `requestId` |
+|---|---|
+| `subagents:rpc:worker-spawn` | `{type, prompt, route: {provider, model}, cwd, access: 'read-only' | 'write', thinkingLevel?, maxTurns?, signal?}` |
+| `subagents:rpc:worker-resume` | `{handle, prompt, signal?}` |
+| `subagents:rpc:worker-status` | `{handle}` |
+| `subagents:rpc:worker-stop` | `{handle}` |
+
+All use the standard envelope and `<channel>:reply:<requestId>`. Receipts contain `{handle, agentId, route, status, sessionId?}`; status also supplies `result?`, `error?`, and `usage?`. Spawn/resume are detached and retain the existing background queue. A receipt without `sessionId` means startup is pending, not that a provider request succeeded. Once created, the actual session route is checked and its session ID is recorded in the owning session's `subagents:managed-worker` entry. Completion continues through the existing runner lifecycle/notification route.
+
+Handles are opaque, random, bounded to 100 retained workers, and scoped to the owning Pi session and canonical parent workspace. Unknown, foreign, evicted and restart-stale handles fail closed; a busy handle cannot resume. Resume reuses the live session, model, tools and system context. **Restart restoration is not implemented**: ownership receipts are persisted, but sessions are in memory and no raw session path is accepted. Session switches stop managed workers and invalidate their handles.
+
+Only native `openai-codex` and `xai` routes with exact available model IDs, OAuth and effective `auth.oauth.isSubscription` qualify. Anthropic is refused as **billing-unverified** because some child paths may charge extra usage. Registered provider overrides and non-native model/endpoint configuration are refused. Workers use a separate composed `ModelRuntime`, with OAuth-only native auth and no API-key fallback; request guards also cover lazy native streaming and summary streams. Automatic compaction and retries are disabled, and native retries are set to zero. Parent model/thinking are untouched. Omitted thinking defaults to `off`; `maxTurns` defaults to 24 and accepts integers 1–128.
+
+Read-only workers receive only `read`, `grep`, `find`, and `ls`: no shell, edit/write, ambient extensions, skills or nested delegation tools. Repository context instructions remain loaded. Write workers additionally receive `edit`, `write` and `bash`, and require an existing registered linked Git worktree of the parent repository, distinct from its checkout. Verification runs again at startup and each prompt. This API never creates, commits or removes that worktree. **A worktree is not an OS sandbox**: write workers have shell access, so callers must trust their task and repository instructions.
+
+`signal` is an in-process `AbortSignal`, not serialisable JSON. It cancels queued or running owned work even if a dispatch deadline expires before its receipt arrives. `worker-stop` remains available after auth revocation; cancellation must not depend on credentials still qualifying. Status does not consume the result or suppress runner notifications.
+
+`usage` contains observed lifetime token counters (`input`, `output`, `cacheRead`, `cacheWrite`), omitted until an assistant usage event is observed. Missing usage is unknown; zero counters and subscription metadata are **not proof of billing**, a free request, or cache savings.
+
 ## Spawn options
 
 `subagents:rpc:spawn` forwards `options` to `AgentManager.spawn` — but not verbatim. The manager's `spawn` behind the RPC is `spawnTopLevel` (`src/index.ts:698-721`), which deletes internal-only fields first, and then `spawnResolved` (`src/index.ts:666-696`) overwrites the activity-tracker callbacks with its own. The full interface is `SpawnOptions` at `src/agent-manager.ts:169-303`; what a bus caller actually gets is three different things.

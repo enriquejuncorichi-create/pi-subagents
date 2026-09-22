@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   // The print-mode e2e suite (test/subagents-print-mode-e2e.test.ts) drives REAL
@@ -12,6 +12,9 @@ export default defineConfig({
   // subagent session the extension spawns. dedupe alone is insufficient (it only
   // affects modules Vite resolves; without inline the runtime stays externalized).
   test: {
+    // These real SDK contracts use Bun's node:test bridge, not Vitest.
+    // Run them separately through test:jev-contract and test:jev-recovery.
+    exclude: [...configDefaults.exclude, "integration/**/*.test.ts"],
     server: { deps: { inline: [/@earendil-works\/pi-/] } },
     // Local reporting only — deliberately no `thresholds`, and not wired into
     // CI. src/index.ts is mostly the /agents wizard, which is TUI flow with

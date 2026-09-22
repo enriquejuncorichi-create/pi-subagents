@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Managed worker RPC (`managed-workers-v1`)** adds scoped opaque handles, exact native Codex/xAI subscription routes, background live-session resume and cancellable dispatch. Read-only workers have a fixed tool allowlist; write workers require an externally maintained linked worktree that this API never commits or removes. Owned startup receipts are persisted, restart-stale handles are refused, and observed tokens are not presented as billing proof. See `docs/rpc.md` for the contract and limitations.
+
 ### Fixed
 - **The workflow stand-down now recognises a lowercase `workflow` tool** ([#283](https://github.com/tintinweb/pi-subagents/issues/283) — thanks [@zampierilucas](https://github.com/zampierilucas)). The match is exact on purpose, and the set held `Workflow` and `SubagentWorkflow` only, so `@quintinshaw/pi-dynamic-workflows` — which registers lowercase `workflow` — never tripped it: with `workflowsEnabled` unset, both orchestrators reached the model and nothing warned. Adding the third name is the whole fix; exactness is kept, so a `list_workflows` still cannot take the feature down.
 

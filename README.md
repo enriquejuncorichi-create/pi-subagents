@@ -745,6 +745,8 @@ The four agent-lifecycle events — `subagents:started`, `:completed`, `:failed`
 
 ## Cross-Extension RPC
 
+This user-maintained fork also advertises [`managed-workers-v1`](docs/rpc.md#managed-workers-v1): exact native subscription routes, owner-scoped handles, recovery of persisted owned sessions and externally managed write worktrees. Jev Assist uses it for [opt-in per-task subagent model routing](https://github.com/enriquejuncorichi-create/pi-jev-assist/blob/main/docs/worker-routing.md); this fork does not switch the parent Pi model. Recovery never replays a prompt, steals a lease or assumes another session owns a worker.
+
 Other pi extensions can spawn and stop subagents programmatically via the `pi.events` event bus, without importing this package directly.
 
 All RPC replies use a standardized envelope: `{ success: true, data?: T }` on success, `{ success: false, error: string }` on failure.

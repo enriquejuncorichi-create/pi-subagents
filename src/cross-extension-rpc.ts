@@ -14,6 +14,7 @@
  */
 
 import { isTopLevelAgent } from "./agent-manager.js";
+import { MANAGED_WORKERS_CAPABILITY, type ManagedWorkers, type WorkerRequest, type WorkerSpawn } from "./managed-workers.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
 import type { AgentRecord } from "./types.js";
@@ -57,6 +58,7 @@ export interface RpcDeps {
   pi: unknown;                    // passed through to manager.spawn
   getCtx: () => unknown | undefined;  // returns current ExtensionContext
   manager: SpawnCapable;
+  managedWorkers?: ManagedWorkers;
 }
 
 export interface RpcHandle {
@@ -64,6 +66,7 @@ export interface RpcHandle {
   unsubSpawn: () => void;
   unsubStop: () => void;
   unsubConsume: () => void;
+  unsubWorkers: () => void;
 }
 
 /**
@@ -98,7 +101,7 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
   const { events, pi, getCtx, manager } = deps;
 
   const unsubPing = handleRpc(events, "subagents:rpc:ping", () => {
-    return { version: PROTOCOL_VERSION };
+    return { version: PROTOCOL_VERSION, ...(deps.managedWorkers ? { capabilities: [MANAGED_WORKERS_CAPABILITY] } : {}) };
   });
 
   const unsubSpawn = handleRpc<{ requestId: string; type: string; prompt: string; options?: any }>(
@@ -194,5 +197,12 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
     },
   );
 
-  return { unsubPing, unsubSpawn, unsubStop, unsubConsume };
+  const workers = deps.managedWorkers;
+  const workerUnsubs = workers ? [
+    handleRpc<WorkerSpawn>(events, "subagents:rpc:worker-spawn", input => workers.spawn(input)),
+    handleRpc<WorkerRequest>(events, "subagents:rpc:worker-resume", input => workers.resume(input)),
+    handleRpc<WorkerRequest>(events, "subagents:rpc:worker-status", input => workers.status(input)),
+    handleRpc<WorkerRequest>(events, "subagents:rpc:worker-stop", input => workers.stop(input)),
+  ] : [];
+  return { unsubPing, unsubSpawn, unsubStop, unsubConsume, unsubWorkers: () => { for (const unsub of workerUnsubs) unsub(); } };
 }

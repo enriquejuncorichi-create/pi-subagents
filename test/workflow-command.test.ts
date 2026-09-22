@@ -161,7 +161,11 @@ describe("/agents → Workflows", () => {
     });
 
     it("asks which run when several exist, newest first", async () => {
-      const { command } = await withRuns(3);
+      // Fast hosts can create multiple runs in one millisecond. This assertion
+      // concerns different creation times, not the unspecified equal-time tie.
+      let tick = Date.now();
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => ++tick);
+      const { command } = await withRuns(3).finally(() => clock.mockRestore());
       const ui = commandCtx();
       ui.setPick(undefined);
       await command.handler("", ui.context);

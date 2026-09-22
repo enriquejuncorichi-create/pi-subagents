@@ -159,7 +159,8 @@ export interface SubagentsSettings {
    *     Agent tool result, so the widget would otherwise double-render them
    *     (#118); everything else (background, queued, scheduled, RPC) stays.
    *   - `off`: hide the widget entirely.
-   * Defaults to `background`. Pure-UI and applied live (toggling refreshes the
+   * Defaults to `off` in this fork to avoid duplicating the bottom list.
+   * Explicit saved preferences take precedence. Applied live (toggling refreshes the
    * widget).
    */
   widgetMode?: WidgetMode;
@@ -279,14 +280,10 @@ export interface SubagentsSettings {
   showCost?: boolean;
 
   /**
-   * Whether the widget's running rows name the model driving each agent and the
-   * thinking level it is running at.
-   *
-   * Off by default, unlike the tool result and the conversation viewer, which
-   * show the pair unconditionally: those have a line to themselves, while the
-   * widget row already carries the description, turns, tool uses, tokens and
-   * elapsed time, and every character it gains is one the description loses on a
-   * narrow terminal.
+   * Whether the bottom list and optional top widget name each agent's resolved
+   * model and thinking level, including completed rows. Defaults to true in this
+   * fork; an explicit saved false remains respected. Requested routes are
+   * labelled separately until the runtime resolves the model.
    */
   showModel?: boolean;
   /**

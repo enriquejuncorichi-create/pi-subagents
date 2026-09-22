@@ -13,11 +13,14 @@
  * because the caller starts the agent directly on `spawned: false` and a
  * rejection would instead lose the mention entirely.
  */
+import type { DefaultResourceLoaderOptions } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Hoisted: vi.mock's factory is lifted above the imports, so it cannot close
 // over ordinary top-level consts.
-const { buildSessionContext, createAgentSession, inMemory } = vi.hoisted(() => ({
+const { buildSessionContext, createAgentSession, inMemory, reload, loaderOptions } = vi.hoisted(() => ({
+  reload: vi.fn(),
+  loaderOptions: vi.fn(),
   buildSessionContext: vi.fn(),
   createAgentSession: vi.fn(),
   inMemory: vi.fn(),
@@ -29,6 +32,19 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
     ...actual,
     buildSessionContext,
     createAgentSession,
+    DefaultResourceLoader: class {
+      private systemPrompt = "rebuilt-from-cwd";
+      constructor(private options: DefaultResourceLoaderOptions) {
+        loaderOptions(options);
+      }
+      async reload() {
+        await reload();
+        this.systemPrompt = this.options.systemPromptOverride?.(this.systemPrompt) ?? this.systemPrompt;
+      }
+      getSystemPrompt() {
+        return this.systemPrompt;
+      }
+    },
     SessionManager: { ...actual.SessionManager, inMemory },
   };
 });
@@ -43,6 +59,8 @@ const CONVERSATION = [
 ] as any[];
 
 beforeEach(() => {
+  reload.mockReset();
+  loaderOptions.mockReset();
   createAgentSession.mockReset();
   inMemory.mockReset();
   inMemory.mockReturnValue({ kind: "in-memory-session-manager" } as any);
@@ -105,6 +123,11 @@ function cloneSession(turn?: (tool: any) => Promise<void> | void) {
   } as any;
   createAgentSession.mockImplementation(async (opts: any) => {
     const tools = visibleTools(opts);
+    // Match SDK 0.87's read-only state: direct prompt assignment must fail.
+    Object.defineProperty(session.agent.state, "systemPrompt", {
+      get: () => opts.resourceLoader.getSystemPrompt(),
+      configurable: true,
+    });
     session.prompt.mockImplementation(async () => {
       // No tool, no tool call: the model can only answer in prose.
       if (tools.length === 0) return;
@@ -200,19 +223,43 @@ describe("cloning the conversation", () => {
     // createAgentSession derives a prompt from cwd and agentDir. Close, but not
     // what the user's model is working under — extensions add to it per turn.
     const session = cloneSession(callsAgent());
+    const ctx = mainCtx();
+    reload.mockImplementation(async () => {
+      // A later parent change must not alter the prompt captured for this turn.
+      ctx.getSystemPrompt.mockReturnValue("a later parent prompt");
+    });
 
-    await runMentionClone(opts());
+    expect(await runMentionClone(opts({ ctx }))).toEqual({ spawned: true });
 
+    expect(ctx.getSystemPrompt).toHaveBeenCalledTimes(1);
     expect(session.agent.state.systemPrompt).toBe("the live system prompt");
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(reload.mock.invocationCallOrder[0]).toBeLessThan(createAgentSession.mock.invocationCallOrder[0]);
+    expect(loaderOptions.mock.calls[0][0].appendSystemPromptOverride(["duplicate"])).toEqual([]);
+    expect(loaderOptions.mock.calls[0][0].noContextFiles).toBe(true);
+    expect(session.agent.state.messages).toEqual(CONVERSATION);
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains the loader's default prompt when the parent has none", async () => {
+    const session = cloneSession(callsAgent());
+
+    expect(await runMentionClone(opts({ ctx: mainCtx({ getSystemPrompt: undefined }) })))
+      .toEqual({ spawned: true });
+
+    expect(session.agent.state.systemPrompt).toBe("rebuilt-from-cwd");
+    expect(loaderOptions.mock.calls[0][0].systemPromptOverride).toBeUndefined();
   });
 
   it("inherits the parent's model, thinking level and providers", async () => {
     cloneSession(callsAgent());
+    const ctx = mainCtx({ model: Object.freeze({ id: "main-model" }) });
 
-    await runMentionClone(opts());
+    await runMentionClone(opts({ ctx }));
 
     const built = createAgentSession.mock.calls[0][0];
-    expect(built.model).toEqual({ id: "main-model" });
+    expect(built.model).toBe(ctx.model);
+    expect(ctx.model).toEqual({ id: "main-model" });
     expect(built.thinkingLevel).toBe("high");
     expect(built.modelRuntime).toEqual({ kind: "runtime" });
   });
@@ -364,6 +411,16 @@ describe("when the clone cannot deliver", () => {
 
     expect(result.spawned).toBe(false);
     expect(result.error).toContain("did not start it");
+  });
+
+  it("reports resource reload failure without creating a session", async () => {
+    reload.mockRejectedValue(new Error("resource loading failed"));
+
+    await expect(runMentionClone(opts())).resolves.toEqual({
+      spawned: false,
+      error: "resource loading failed",
+    });
+    expect(createAgentSession).not.toHaveBeenCalled();
   });
 
   it("returns a thrown error rather than rejecting", async () => {

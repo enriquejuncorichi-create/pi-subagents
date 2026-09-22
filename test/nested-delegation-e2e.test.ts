@@ -19,7 +19,7 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Context, fauxToolCall } from "@earendil-works/pi-ai";
+import { type Context, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
@@ -27,6 +27,7 @@ import { encodeCwd } from "../src/output-file.js";
 import {
   agentCall,
   type FauxReply,
+  fauxResponderContext,
   type PrintModeRun,
   runPrintMode,
 } from "./helpers/print-mode-runner.js";
@@ -81,6 +82,44 @@ function writeAgents(cwd: string): void {
   );
 }
 
+describe("faux responder context compatibility", () => {
+  it("replays system patches without changing the provider transcript", () => {
+    const oldTool = { name: "old", description: "Old tool", parameters: { type: "object" } };
+    const newTool = { ...oldTool, name: "Agent" };
+    const context: Context = {
+      messages: [
+        { role: "system", content: "Base prompt", toolsAdded: [oldTool], sections: { policy: "Old policy" }, timestamp: 0 },
+        { role: "user", content: "Delegate", timestamp: 1 },
+        { role: "system", content: "Extra prompt", toolsRemoved: [{ name: "old" }], toolsAdded: [newTool], sections: { policy: "New policy" }, timestamp: 2 },
+      ],
+    };
+    const original = structuredClone(context);
+    const view = fauxResponderContext(context);
+
+    expect(view.tools).toEqual([newTool]);
+    expect(view.systemPrompt).toContain("Base prompt");
+    expect(view.systemPrompt).toContain("Extra prompt");
+    expect(view.systemPrompt).toContain("New policy");
+    expect(view.systemPrompt).not.toContain("Old policy");
+    expect(view.messages).toEqual([context.messages[1]]);
+    expect(view.messages).not.toBe(context.messages);
+    expect(context).toEqual(original);
+  });
+
+  it("preserves explicit legacy fields, including empty values", () => {
+    const context: Context = {
+      systemPrompt: "",
+      tools: [],
+      messages: [{ role: "system", content: "Transcript prompt", timestamp: 0 }],
+    };
+    const view = fauxResponderContext(context);
+    expect(view.systemPrompt).toBe("");
+    expect(view.tools).toBe(context.tools);
+    expect(view.messages).toEqual([]);
+    expect(context.messages).toHaveLength(1);
+  });
+});
+
 describe("nested delegation e2e (real pi-mono, faux model)", () => {
   let run: PrintModeRun | undefined;
   const tmpDirs: string[] = [];
@@ -101,7 +140,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
 
     const respond = (context: Context): FauxReply => {
       const text = firstUserText(context);
-      const names = (context.tools ?? []).map((t) => t.name);
+      const names = (context.tools ?? getCurrentTools(context.messages)).map((t) => t.name);
 
       // Leaf: no nested tools (it never opted in) — just answer.
       if (text.includes("Do the leaf work")) {

@@ -16,7 +16,7 @@ import { hasAgentBadge, renderAgentName } from "../agent-color.js";
 import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
 import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
-import { type AgentActivity, formatCost, type Theme } from "./agent-widget.js";
+import { type AgentActivity, formatAgentModelLabel, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.js";
 
 /** Widget key for the below-editor fleet list. */
@@ -144,6 +144,8 @@ export class FleetList {
      * point. Omitted → `m` still cycles, viewer-locally.
      */
     private onViewerMarkdown?: (mode: ViewerMarkdownMode) => void,
+    /** Same live opt-out as the above-editor widget; identity is on by default. */
+    private showModel: () => boolean = () => true,
   ) {}
 
   // ---- Lifecycle ----
@@ -529,7 +531,11 @@ export class FleetList {
       ? { fallbackColor: "text", bold: hasAgentBadge(record.type) }
       : { fallbackColor: "muted" });
     const description = selected ? theme.fg("text", record.description) : record.description;
-    const left = `  ${this.bullet(rosterIndex, sel, theme)} ${name}  ${description}`;
+    const model = this.showModel()
+      ? ` ${theme.fg(selected ? "text" : "muted", `[${formatAgentModelLabel(record)}]`)}`
+      : "";
+    const identity = `  ${this.bullet(rosterIndex, sel, theme)} ${name}${model}`;
+    const left = `${identity}  ${description}`;
     // The record, not the activity tracker — see the note in AgentWidget's
     // running line: only the record carries a nested child's spend, and only it
     // outlives the agent.
@@ -538,6 +544,11 @@ export class FleetList {
     const cost = this.showCost() ? formatCost(getLifetimeCost(record.lifetimeUsage)) : "";
     const stats = `${formatFleetElapsed(elapsedMs)} · ${formatFleetTokens(tokens)}${cost ? ` · ${cost}` : ""}`;
     const right = selected ? theme.fg("text", stats) : theme.fg("dim", stats);
+    // On narrow terminals, sacrifice stats before identity, then description.
+    // Keep the legacy stats-first layout when the user explicitly hides models.
+    if (this.showModel() && visibleWidth(identity) + visibleWidth(right) + 1 > width) {
+      return truncateToWidth(left, width);
+    }
     return rightAlign(left, right, width);
   }
 }
