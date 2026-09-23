@@ -18,6 +18,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
@@ -156,7 +157,47 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     expect(reply![1].data.id).toBeTruthy();
   });
 
+  it("keeps the bottom fleet list enabled and the top widget hidden without display settings", async () => {
+    const { pi, lifecycle, tools } = makePi();
+    const activeCtx = ctx(true);
+    subagentsExtension(pi);
+
+    await lifecycle.get("session_start")({}, activeCtx);
+    vi.mocked(runAgent).mockImplementation((_ctx, _type, _prompt, options) => {
+      // Fleet rows require a session so every visible agent can be opened.
+      options.onSessionCreated?.({ subscribe: () => vi.fn(), dispose: vi.fn() } as unknown as AgentSession);
+      return new Promise<Awaited<ReturnType<typeof runAgent>>>(() => {});
+    });
+    try {
+      await tools.get("Agent").execute(
+        "tc-default-display",
+        {
+          subagent_type: "general-purpose", prompt: "go",
+          description: "visible fleet agent", run_in_background: true,
+        },
+        undefined, undefined, activeCtx,
+      );
+
+      await vi.waitFor(() => {
+        expect(activeCtx.ui.setWidget).toHaveBeenCalledWith(
+          "fleet",
+          expect.any(Function),
+          { placement: "belowEditor" },
+        );
+        expect(runAgent).toHaveBeenCalled();
+      });
+      expect(activeCtx.ui.setWidget.mock.calls.some(
+        ([key, content]: [string, unknown]) => key === "agents" && content !== undefined,
+      )).toBe(false);
+    } finally {
+      await lifecycle.get("session_shutdown")();
+    }
+  });
+
   it("renders an RPC-spawned agent in the native widget while it is running", async () => {
+    writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({
+      schedulingEnabled: false, widgetMode: "background",
+    }));
     const { pi, lifecycle, busHandlers } = makePi();
     const activeCtx = ctx(true);
     subagentsExtension(pi);
@@ -186,6 +227,9 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
   });
 
   it("shows live tool activity for an RPC-spawned background agent", async () => {
+    writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({
+      schedulingEnabled: false, widgetMode: "background",
+    }));
     const { pi, lifecycle, busHandlers } = makePi();
     let widgetFactory: any;
     const setWidget = vi.fn((key: string, content: any) => {

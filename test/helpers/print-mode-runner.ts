@@ -53,6 +53,8 @@ import {
   fauxAssistantMessage,
   fauxText,
   fauxToolCall,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   type Model,
   type ToolCall,
 } from "@earendil-works/pi-ai";
@@ -188,6 +190,16 @@ export function agentCall(
   return fauxToolCall("Agent", { subagent_type: "general-purpose", ...args }, opts);
 }
 
+/** Legacy-shaped view for test scripts only; never replace the provider transcript. */
+export function fauxResponderContext(context: Context): Context {
+  return {
+    ...context,
+    tools: context.tools ?? getCurrentTools(context.messages),
+    systemPrompt: context.systemPrompt ?? getCurrentSystemPrompt(context.messages),
+    messages: context.messages.filter((message) => message.role !== "system"),
+  };
+}
+
 function resolveReply(
   reply: FauxReply | ((ctx: Context) => FauxReply),
   ctx: Context,
@@ -321,7 +333,11 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     // is the same responder that decides from its own context, so interleaving
     // order doesn't matter.
     if (options.steps) {
-      faux.setResponses(options.steps);
+      faux.setResponses(options.steps.map((step) =>
+        typeof step === "function"
+          ? (context, opts, state) => step(fauxResponderContext(context), opts, state)
+          : step,
+      ));
     } else {
       const respond = options.respond;
       if (!respond) {
@@ -329,7 +345,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
       }
       const max = options.maxModelCalls ?? 16;
       const factory: FauxResponseStep = async (context, _opts, state) =>
-        toAssistantMessage(await respond(context, state));
+        toAssistantMessage(await respond(fauxResponderContext(context), state));
       faux.setResponses(Array.from({ length: max }, () => factory));
     }
   }
@@ -347,7 +363,25 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     noThemes: true,
     noContextFiles: true,
   });
-  await loader.reload();
+  try {
+    await loader.reload();
+    const extensionErrors = loader.getExtensions().errors;
+    if (extensionErrors.length) {
+      throw new Error(`Print-mode extension failed to load: ${JSON.stringify(extensionErrors)}`);
+    }
+  } catch (error) {
+    faux?.unregister();
+    process.chdir(prevCwd);
+    if (isolateGlobals) {
+      if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+      if (prevHome == null) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (hermeticDir) rmSync(hermeticDir, { recursive: true, force: true });
+    }
+    if (ownsCwd) rmSync(cwd, { recursive: true, force: true });
+    throw error;
+  }
 
   // Run any test-supplied registration (e.g. loadCustomAgents) now that globals
   // are isolated but before the parent turn spawns anything.

@@ -20,6 +20,7 @@ import { isAbsolute } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
+import { isManagedWorkerSession, type ManagedRun } from "./managed-worker-runtime.js";
 import { assignHandle, handleBase } from "./mention.js";
 import { describeModel } from "./model-resolver.js";
 import type { AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, SubagentType, ThinkingLevel } from "./types.js";
@@ -167,6 +168,7 @@ interface SpawnArgs {
 }
 
 interface SpawnOptions {
+  managed?: ManagedRun;
   description: string;
   /**
    * Optional memorable name for this instance, becoming a second handle
@@ -762,6 +764,7 @@ export class AgentManager {
       pi,
       agentId: id,
       model: options.model,
+      managed: options.managed,
       maxTurns: options.maxTurns,
       isolated: options.isolated,
       inheritContext: options.inheritContext,
@@ -1449,7 +1452,9 @@ export class AgentManager {
    * transcript, so the mention would have nothing to continue from.
    */
   private tombstone(record: AgentRecord): void {
-    if (!record.handle || !record.sessionFile) return;
+    // Managed transcripts may only reopen through owned managed recovery.
+    // Ordinary mention resurrection drops subscription and lease protections.
+    if (!record.handle || !record.sessionFile || isManagedWorkerSession(record.session)) return;
     this.tombstones.set(record.handle, {
       handle: record.handle,
       alias: record.alias,

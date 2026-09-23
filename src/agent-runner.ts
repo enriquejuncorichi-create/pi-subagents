@@ -22,6 +22,7 @@ import { runInChildSessionContext } from "./child-context.js";
 import { buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
+import { type ManagedRun, runManagedWorker, setManagedWorkerSignal } from "./managed-worker-runtime.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
 import { createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager } from "./nested-tools.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
@@ -395,6 +396,8 @@ export interface ToolActivity {
 }
 
 export interface RunOptions {
+  /** Internal managed-worker capability; never accepted from legacy RPC options. */
+  managed?: ManagedRun;
   /** ExtensionAPI instance — used for pi.exec() instead of execSync. */
   pi: ExtensionAPI;
   /** Manager-assigned id; suffixes session name to disambiguate parallel spawns (e.g. `Explore#a1b2c3d4`). */
@@ -613,6 +616,7 @@ export async function runAgent(
   prompt: string,
   options: RunOptions,
 ): Promise<RunResult> {
+  if (options.managed) return runManagedWorker(ctx, type, prompt, options, options.managed);
   const config = getConfig(type);
   const agentConfig = getAgentConfig(type);
 
@@ -1161,6 +1165,7 @@ export async function resumeAgent(
     signal?: AbortSignal;
   } = {},
 ): Promise<{ text: string; failure?: string }> {
+  setManagedWorkerSignal(session, options.signal);
   // Boundary for the history fallback: the session already holds prior turns,
   // so only assistant text produced by THIS resume prompt counts as its output
   // — a failed resume must not surface the previous turn's answer (#144).

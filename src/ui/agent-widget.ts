@@ -214,11 +214,25 @@ export function buildInvocationTags(
   };
 }
 
-/** Truncate text to a single line, max `len` chars. */
+/** Identity comes only from this agent's snapshot, never the main model or type defaults. */
+export function formatAgentModelLabel(record: { status: string; invocation?: AgentInvocation }): string {
+  const invocation = record.invocation;
+  const { modelId, modelName } = buildInvocationTags(invocation);
+  const identity = modelId || modelName;
+  if (record.status === "queued") {
+    if (identity) return `selected: ${identity}`;
+    if (invocation?.requestedModel) return `requested: ${invocation.requestedModel}`;
+  }
+  if (identity) return identity;
+  return invocation?.requestedModel
+    ? `model pending (requested: ${invocation.requestedModel})`
+    : "model pending";
+}
+
+/** Truncate text to a single line, max `len` display columns. */
 function truncateLine(text: string, len = 60): string {
   const line = text.split("\n").find(l => l.trim())?.trim() ?? "";
-  if (line.length <= len) return line;
-  return line.slice(0, len) + "…";
+  return truncateToWidth(line, len, "…");
 }
 
 /** Build a human-readable activity string from currently-running tools or response text. */
@@ -283,13 +297,10 @@ export class AgentWidget {
      */
     private showCost: () => boolean = () => false,
     /**
-     * Read live at render time, like `mode`. Whether running agents name the
-     * model driving them and the thinking level it is running at. Defaults to
-     * off — the extension supplies the user's `showModel` setting — because the
-     * row is already dense and the same pair is on the tool result and in the
-     * conversation viewer unconditionally.
+     * Read live at render time. Model identity leads the description on running
+     * and finished rows. On by default in this fork; explicit opt-out survives.
      */
-    private showModel: () => boolean = () => false,
+    private showModel: () => boolean = () => true,
   ) {}
 
   /**
@@ -370,7 +381,7 @@ export class AgentWidget {
   }
 
   /** Render a finished agent line. */
-  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; lifetimeUsage?: LifetimeUsage }, theme: Theme): string {
+  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; lifetimeUsage?: LifetimeUsage; invocation?: AgentInvocation }, theme: Theme): string {
     const modeLabel = getPromptModeLabel(a.type);
     const duration = formatMs((a.completedAt ?? Date.now()) - a.startedAt);
 
@@ -387,7 +398,7 @@ export class AgentWidget {
       statusText = theme.fg("dim", " stopped");
     } else if (a.status === "error") {
       icon = theme.fg("error", "✗");
-      const errMsg = a.error ? `: ${a.error.slice(0, 60)}` : "";
+      const errMsg = a.error ? `: ${truncateToWidth(a.error, 60)}` : "";
       statusText = theme.fg("error", ` error${errMsg}`);
     } else {
       // aborted
@@ -407,7 +418,8 @@ export class AgentWidget {
     parts.push(duration);
 
     const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
-    return `${icon} ${renderAgentName(a.type, theme, { fallbackColor: "dim" })}${modeTag}  ${theme.fg("dim", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}${statusText}`;
+    const modelTag = this.showModel() ? ` ${theme.fg("muted", `[${formatAgentModelLabel(a)}]`)}` : "";
+    return `${icon} ${renderAgentName(a.type, theme, { fallbackColor: "dim" })}${modelTag}${modeTag}  ${theme.fg("dim", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}${statusText}`;
   }
 
   /**
@@ -462,11 +474,8 @@ export class AgentWidget {
 
       const parts: string[] = [];
       if (this.showModel()) {
-        // Leading, and paired: a thinking level means nothing without the model
-        // it applies to. The tag is taken from buildInvocationTags rather than
-        // rebuilt so the "(asked X)" annotation survives.
-        const { modelName, tags } = buildInvocationTags(a.invocation);
-        if (modelName) parts.push(modelName);
+        // Keep request/effective thinking differences, without repeating identity.
+        const { tags } = buildInvocationTags(a.invocation);
         const thinkingTag = tags.find(tag => tag.startsWith("thinking: "));
         if (thinkingTag) parts.push(thinkingTag);
       }
@@ -478,9 +487,10 @@ export class AgentWidget {
       const statsText = parts.join(" · ");
 
       const activity = bg ? describeActivity(bg.activeTools, bg.responseText) : "thinking…";
+      const modelTag = this.showModel() ? ` ${theme.fg("muted", `[${formatAgentModelLabel(a)}]`)}` : "";
 
       runningLines.push([
-        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${renderAgentName(a.type, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
+        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${renderAgentName(a.type, theme, { bold: true })}${modelTag}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
         truncate(theme.fg("dim", "│  ") + theme.fg("dim", `  ⎿  ${activity}`)),
       ]);
     }
